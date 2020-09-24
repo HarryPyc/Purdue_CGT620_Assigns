@@ -27,6 +27,7 @@ int main() {
 	//how many images should be accumulated
 	const unsigned int n = 5, total_frames = 39;
 	CircularBuffer<unsigned char*> ImageBuffer(n);
+	ImageBuffer.MallocBuffer();
 	int components = 0, requiredComponents = 3, w, h;
 	stbi_load("images/originals/teapot0.bmp", &w, &h, &components, requiredComponents);
 	const unsigned int imageSize = w * h * 3;
@@ -44,10 +45,10 @@ int main() {
 	}
 	//processing image
 	for (int i = 0; i < total_frames; i++) {
-		/*if (i >= n) {
+		if (i >= n) {
 			unsigned char* d_imgpop = ImageBuffer.pop();
 			cudaFree(d_imgpop);
-		}*/
+		}
 		//Read Image
 		string file = "images/originals/teapot" + to_string(i) + ".bmp";
 		h_imgin = stbi_load(file.c_str(), &w, &h, &components, requiredComponents);
@@ -67,7 +68,6 @@ int main() {
 			goto Error;
 		}
 		ImageBuffer.push(d_imgin);
-		ImageBuffer.uploadToDevice();
 
 		//Process Image
 		const int TILE = 16;
@@ -113,6 +113,7 @@ Error:
 		cudaFree(ImageBuffer[i]);
 	cudaFree(d_imgout);
 	cudaFree(acc_buffer);
+	ImageBuffer.free();
 
 	cudaStatus = cudaDeviceReset();
 	if (cudaStatus != cudaSuccess) {
