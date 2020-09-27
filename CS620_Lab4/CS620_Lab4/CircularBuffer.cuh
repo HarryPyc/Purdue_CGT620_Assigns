@@ -40,7 +40,7 @@ public:
 	}
 	__host__
 	inline T& pop() {
-		T& res = buffer[it_start%n];
+		T res = buffer[it_start%n];
 		buffer[it_start%n] = T(NULL);
 		if(it_start < it_end)
 			it_start++;
