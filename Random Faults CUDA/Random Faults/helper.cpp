@@ -60,7 +60,7 @@ void DrawPoint(Vect3d a, Vect3d color) {
 
 void _Display(void)
 {
-
+	
 }
 
 

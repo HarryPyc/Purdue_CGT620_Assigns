@@ -17,6 +17,7 @@
 #include <math.h>
 #include <vector>			//Standard template library class
 #include <GL/freeglut.h>
+#include <omp.h>
 
 //in house created libraries
 #include "vect3d.h"
@@ -24,7 +25,7 @@
 #include "helper.h"       
 #include "Line.cuh"
 
-
+#define PI 3.1415926
 #pragma comment(lib, "freeglut.lib")
 
 TrackBallC trackball;
@@ -37,25 +38,27 @@ GLint hWindow = 800;
 #define DEBUG
 const int MAX = 256;
 const int SCENE = 1;
-const int maxSteps = 256;
+const int maxSteps = 2048;
+const float initialIntensity = 0.01f;
 
 GLint n = 1;
 GLfloat a[MAX][MAX];
 GLint fill = 1;
 #define ELEV 0.0005f
 
-
+std::vector<Line> lines;
 
 //CUDA stuff
 float *d_A;
-Line* lines;
+__constant__ Line d_lines[maxSteps];
+
 
 void Cleanup(bool noError)
 {
 	cudaError_t error;
 	// Free device memory
 	if (d_A) error = cudaFree(d_A);
-	if (!noError || error != cudaSuccess) printf("Something failed \n");
+	if (!noError || error != cudaSuccess) printf("d_A cudaFree failed \n");
 }
 
 
@@ -152,6 +155,16 @@ void DisplayUgly(void)
 	}
 	glEndList();
 }
+inline float rand01() {
+	return float(rand()) / float(RAND_MAX);
+}
+void InitLines() {
+	lines.clear();
+	for (int i = 0; i < maxSteps; i++) {
+		Line l(rand01(), rand01(), cos(rand01() * 2 * PI), sin(rand01() * 2 * PI));
+		lines.push_back(l);
+	}
+}
 
 void Init(void)
 {
@@ -162,6 +175,7 @@ void Init(void)
 	glEnable(GL_DEPTH_TEST);
 	for (i = 0; i < MAX; i++)
 		for (j = 0; j < MAX; j++)  a[i][j] = 0.5;
+	InitLines();
 
 }
 
@@ -180,7 +194,14 @@ void myReshape(int w, int h)
 void RandomFault(void)
 {
 	//Write the CPU version here
-
+#pragma omp parallel for collapse(2)
+	for (int i = 0; i < MAX; i++) {
+		for (int j = 0; j < MAX; j++) {
+			for (int k = 0; k < maxSteps; k++) {
+				a[i][j] += lines[k].LineFunc(float(i) / float(MAX), float(j) / float(MAX)) * initialIntensity / float(k+1);
+			}
+		}
+	}
 }
 
 
@@ -193,13 +214,7 @@ void Key(unsigned char key, GLint i, GLint j)
 	case ' ': //run CPU implementation
 	{
 		long t1 = clock();
-		for (int i = 0; i < maxSteps; i++)
-		{
-			char name[200];
-			sprintf(name, "%i%% done\r", 100 * (i + 1) / maxSteps);
-			glutSetWindowTitle(name);
-			RandomFault();
-		}
+		RandomFault();
 		long t2 = clock();
 		glutSetWindowTitle("Random Faults in Cuda");
 		printf("CPU Running time: %i\n", t2 - t1);
@@ -213,6 +228,13 @@ void Key(unsigned char key, GLint i, GLint j)
 		long t2 = clock();
 		glutSetWindowTitle("Random Faults in Cuda");
 		printf("CUDA Running time: %i\n", t2 - t1);
+		break;
+	}
+	case 'R':
+	case 'r':
+	{
+		InitLines();
+		printf("Reset Lines\n");
 		break;
 	}
 	case 27:
@@ -267,13 +289,16 @@ void MouseMotion(int x, int y) {
 
 __global__ void RandFaultKernel(float a[MAX][MAX],  //2D array of elements
 	const int N, //array is N*N
-	const int n) //number of steps to run
+	const int n,  //number of steps to run
+	const float initialIntensity)
 {
 	int i = blockDim.x*blockIdx.x + threadIdx.x;
 	int j = blockDim.y*blockIdx.y + threadIdx.y;
 	if ((i>=N) || (j>=N)) return;
 //Write the kernel here
-	a[i][j] += (sin((float)i/ blockDim.x)+ cos((float)j / blockDim.y))*0.001;
+	for (int k = 0; k < n; k++) {
+		a[i][j] += d_lines[k].LineFunc(float(i) / float(N), float(j) / float(N)) * initialIntensity / float(k + 1);
+	}
 }
 
 
@@ -281,6 +306,9 @@ void RandomFaultsCuda()
 {
 	cudaError_t error;
 	int sizeArray;
+
+	error = cudaMemcpyToSymbol(d_lines, lines.data(), maxSteps * sizeof(Line));
+	if (error != cudaSuccess) printf("d_lines Memcpy failed");
 
 	//allocate array on the device
 	sizeArray = sizeof(float)*MAX*MAX; //2D array of floats
@@ -295,9 +323,9 @@ void RandomFaultsCuda()
 	dim3 dimGrid(ceil((float)MAX / dimBlock.x),
 		         ceil((float)MAX / dimBlock.y));
 	// Invoke kernel
-	RandFaultKernel <<<dimGrid, dimBlock >>> ((float(*)[MAX])d_A, MAX, maxSteps);
+	RandFaultKernel <<<dimGrid, dimBlock >>> ((float(*)[MAX])d_A, MAX, maxSteps, initialIntensity);
 	error = cudaGetLastError();
-	if (error != cudaSuccess) printf("Something went wrong: %i\n", error);
+	if (error != cudaSuccess) printf("Cuda Launch Kernel failed: %i\n", error);
 	error = cudaThreadSynchronize();
 	if (error != cudaSuccess) { printf("synchronization is wrong\n"); Cleanup(false); }
 	// Copy result from device memory to host memory
